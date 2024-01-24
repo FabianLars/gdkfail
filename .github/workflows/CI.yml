@@ -1,0 +1,134 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "renovate/**"
+      - "!renovate/lock-file-maintenance"
+
+env:
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: short
+  # RUSTFLAGS: '-D warnings -W unreachable-pub -W rust-2021-compatibility'
+  RUSTFLAGS: "-W unreachable-pub -W rust-2021-compatibility"
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ secrets.CLEAR_CACHE }}
+
+      - name: Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Compile
+        run: cargo test --no-run --locked
+
+      - name: Test
+        run: cargo test -- --nocapture --quiet
+
+      - name: Lints
+        run: cargo clippy
+
+  tauri:
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - os: macos-latest
+            store: "~/Library/pnpm/store"
+          - os: ubuntu-latest
+            store: "~/.local/share/pnpm/store"
+          - os: windows-latest
+            store: "%LOCALAPPDATA%/pnpm/store"
+
+    name: tauri (${{ matrix.settings.os }})
+    runs-on: ${{ matrix.settings.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ secrets.CLEAR_CACHE }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "16"
+
+      - name: Cache pnpm modules
+        uses: actions/cache@v4
+        with:
+          path: ${{ matrix.settings.store }}
+          key: ${{ runner.os }}-pnpm-tauri-${{secrets.CLEAR_CACHE}}-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-cache-${{secrets.CLEAR_CACHE}}-
+
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 8
+          run_install: true
+
+      - name: tauri build
+        run: pnpm tauri build --debug --verbose
+
+  typescript:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gui
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "16"
+
+      - name: Cache pnpm modules
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: ${{ runner.os }}-pnpm-typescript-${{secrets.CLEAR_CACHE}}-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-cache-${{secrets.CLEAR_CACHE}}-
+
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 8
+          run_install: true
+
+      - name: Types
+        run: pnpm tsc
+
+      - name: Format
+        run: pnpm fmt
+
+      - name: Lints
+        run: pnpm lint
+
+      - name: Test
+        run: pnpm test
